@@ -54,6 +54,51 @@ def signature(func, method=False) -> str:
             return sig 
         raise e
 
+def parse_attributes():
+    indent_level = lambda s: len(s) - len(s.lstrip())
+
+    doc = gurobipy.GRB.Attr.__doc__
+    mapping = {
+        'General model attributes': gurobipy.Model,
+        'Variable attributes': gurobipy.Var,
+        'Constraint attributes': gurobipy.Constr,
+        'SOS': gurobipy.SOS,
+        'Quadratic constraint attributes': gurobipy.QConstr,
+        'GenConstr': gurobipy.GenConstr,
+    }
+    base_indent = None
+    b = None
+    obj = None 
+
+    output = {}
+
+    for line in doc.split('\n'):
+        line = line.rstrip() 
+        if not line: continue 
+
+        if base_indent is None:
+            base_indent = indent_level(line)
+            b = line[:base_indent]
+        elif indent_level(line) == base_indent:
+            matched = [obj for text, obj in mapping.items() if line.strip().startswith(text) and line.endswith(':')]
+            if matched:
+                obj = matched[0]
+                output[obj] = []
+            else:
+                obj = None
+        elif indent_level(line) == base_indent + 2 and obj:
+            name, *rest = line.strip().split(':')
+            comment = ':'.join(rest).strip()
+            output[obj].append(name + ' = ...')
+            output[obj].append('"""' + comment + '"""')
+        elif indent_level(line) > base_indent + 2 and obj:
+            if output[obj]:
+                output[obj][-1] = output[obj][-1].rstrip('"""') + ' ' + line.strip() + '"""'
+    return output
+        
+
+attributes = parse_attributes()
+
 blacklist = ['__name__', '__doc__', '__package__', '__loader__',
 '__spec__', '__path__', '__file__', '__cached__', '__builtins__',
 '__doc__', '__hash__', '__dict__', '__module__']
@@ -107,7 +152,7 @@ def main(root, indent=0, vscode=0) -> str:
         elif inspect.isclass(obj):
             write(f'class {name}({superclass_names(obj)}):')
             write_doc(obj)
-            output.extend(main(obj, indent+4))
+            output.extend(main(obj, indent+4, vscode))
         elif inspect.ismethod(obj) or inspect.ismethoddescriptor(obj):
             write_func(name, obj, True)
         elif inspect.isfunction(obj):
@@ -117,7 +162,24 @@ def main(root, indent=0, vscode=0) -> str:
         else:
             if type(obj).__name__ not in ('builtin_function_or_method', 'getset_descriptor', 'NoneType', '_abc_data'):
                 write(f'{name}: {type(obj).__name__} = ...')
+    if root in attributes:
+        output.extend(i+x for x in attributes[root])
+    
     return output
 
+def make_stub(vscode=False):
+    return '\n'.join(
+        ['from typing import Any', 
+        'from io import TextIOBase as _TextIOBase', 
+        ''] 
+        + main(gurobipy, vscode=vscode)
+    ).replace(', /', '')
+
+
 if __name__ == "__main__":
-    print('\n'.join(['from typing import Any', 'from io import TextIOBase as _TextIOBase', ''] + main(gurobipy)).replace(', /', ''))
+    #parse_attributes()
+    # print(attributes)
+    with open('gurobipy.pyi', 'w') as f:
+        f.write(make_stub(vscode=False))
+    with open('gurobipy_vscode.pyi', 'w') as f:
+        f.write(make_stub(vscode=True))
